@@ -378,11 +378,12 @@ def next_page(driver):
 
 
 def __main__():
+    # General settings
     today = datetime.datetime.today().strftime('%Y-%m-%d %H:%M:%S')
-
+    os.chdir('../')
     # Import settings
     config = configparser.ConfigParser()
-    config.read('config.ini', encoding='utf-8')
+    config.read(r"config\config.ini", encoding='utf-8')
 
     host_name = config.get('SQL DB', 'host_name')
     user_name = config.get('SQL DB', 'user')
