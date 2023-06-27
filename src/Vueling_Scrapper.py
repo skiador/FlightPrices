@@ -253,6 +253,10 @@ def get_flight_info(item, flight_date_string, driver):
             else:
                 print("Failed to click the button after multiple retries")
 
+    except StaleElementReferenceException:
+        # Handle the stale element exception here
+        print("Stale element encountered. Retrying...")
+
     except NoSuchElementException:
         pass  # Blocking element not found, proceed with getting flight information
 
@@ -336,7 +340,7 @@ def store_info_on_db(cursor, flight_info_list, today, connection, driver):
 
         cursor.execute(insert_query)
         connection.commit()
-        print('Price added')
+        print('Price added', end = '\r')
     except Exception as e:
         print('Error occurred while storing price:', e)
         driver.save_screenshot(f"screenshot{today}.png")
