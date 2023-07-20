@@ -6,12 +6,13 @@ import time
 import mysql.connector
 from mysql.connector import Error
 from selenium import webdriver
-from selenium.common.exceptions import StaleElementReferenceException, ElementClickInterceptedException, \
-    NoSuchElementException, TimeoutException
+from selenium.common.exceptions \
+    import StaleElementReferenceException, ElementClickInterceptedException, NoSuchElementException, TimeoutException
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
+from tqdm import tqdm
 
 
 # Set parameters for SQL Db connection
@@ -37,6 +38,8 @@ def configure_driver():
     options = webdriver.ChromeOptions()
     options.add_argument("--start-maximized")
     options.add_argument("--disable-extensions")
+    options.add_argument("--incognito")
+    options.add_experimental_option('excludeSwitches', ['enable-logging'])
 
     # Set up the Chrome driver path relative to the script location
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -65,7 +68,6 @@ def go_to_page(driver, departure, destination, max_retries=3):
                 return None
             print("Retrying...")
             time.sleep(1)
-
     # Cookies accept
     retries = 0
     while retries < max_retries:
@@ -73,7 +75,6 @@ def go_to_page(driver, departure, destination, max_retries=3):
             accept_cookies_button = WebDriverWait(driver, 10).until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, "#onetrust-accept-btn-handler")))
             accept_cookies_button.click()
-            print('Cookies accepted')
             break
         except Exception as e:
             print("An exception occurred:", e)
@@ -92,7 +93,6 @@ def go_to_page(driver, departure, destination, max_retries=3):
                 EC.element_to_be_clickable(
                     (By.CSS_SELECTOR, 'fieldset.elForm_radio--label:nth-child(2) > label:nth-child(2)')))
             one_way_trip_button.click()
-            print('One way trip selected')
             break
         except Exception as e:
             print("An exception occurred:", e)
@@ -114,7 +114,6 @@ def go_to_page(driver, departure, destination, max_retries=3):
             origin_input_text_field = WebDriverWait(driver, 10).until(EC.presence_of_element_located(
                 (By.XPATH, f'//*[@id="stationsList"]/ul/li[contains(normalize-space(), "{departure}")]')))
             origin_input_text_field.click()
-            print(f'Origin airport selected as {departure}')
             break
         except Exception as e:
             print("An exception occurred:", e)
@@ -154,7 +153,6 @@ def go_to_page(driver, departure, destination, max_retries=3):
             destination_input_text_field = WebDriverWait(driver, 10).until(EC.presence_of_element_located(
                 (By.XPATH, f'//*[@id="stationsList"]/ul/li[contains(normalize-space(), "{destination}")]')))
             destination_input_text_field.click()
-            print(f'Destination airport selected as {destination}')
             break
 
         except Exception as e:
@@ -173,7 +171,6 @@ def go_to_page(driver, departure, destination, max_retries=3):
         try:
             # Perform the desired action on the element
             close_date.click()
-            print("Date picker closed")
             break
         except StaleElementReferenceException:
             print("Trying again to close date picker due to StaleElementReferenceException...")
@@ -191,10 +188,9 @@ def go_to_page(driver, departure, destination, max_retries=3):
                 EC.element_to_be_clickable(
                     (By.CSS_SELECTOR, '#AvailabilitySearchInputSearchView_btnClickToSearchNormal')))
             search_button.click()
-            print('Search started')
             break
         except Exception as e:
-            print("An exception occurred:", e)
+            print(f"An exception occurred: {e}")
             retries += 1
             if retries == max_retries:
                 print("Max retries exceeded")
@@ -227,8 +223,6 @@ def get_day_info(driver):
 
     # Format date string (dd-mm-yyyy)
     flight_date_string = f"{year}-{month}-{day}"
-
-    print(f"Date of flight: {flight_date_string}")
 
     # Get all flightcards in the current page
     flightcards = driver.find_elements(By.CSS_SELECTOR, 'div.trip-selector_item')
@@ -318,8 +312,6 @@ def get_flight_info(item, flight_date_string, driver):
     else:
         price = 0
 
-    print(flightnumber, departure_airport, arrival_airport, departure_time, arrival_time, price, airline)
-
     flight_info_list.extend([flightnumber, departure_airport, arrival_airport,
                              departure_time, arrival_time, price, airline])
 
@@ -340,7 +332,6 @@ def store_info_on_db(cursor, flight_info_list, today, connection, driver):
 
         cursor.execute(insert_query)
         connection.commit()
-        print('Price added', end = '\r')
     except Exception as e:
         print('Error occurred while storing price:', e)
         driver.save_screenshot(f"screenshot{today}.png")
@@ -400,30 +391,45 @@ def __main__():
     # Connect to database
     cnx, cursor = connect_to_sql_db(host_name, user_name, user_password, database)
 
+    # Create tuple with all possible combinations of routes
+    total_routes = (len(routes) - 1) * 2
+    airport_routes = []
     for city1 in routes:
         for city2 in routes:
             if (city1 != city2) and (city1 == base_airport or city2 == base_airport):
-                print(f"Getting info on combination {city1} - {city2}")
+                airport_routes.append((city1, city2))
+            else:
+                continue
 
-                # Initialize the driver
-                driver = configure_driver()
+    # Open driver instance
 
-                # Go to the flights page
-                go_to_page(driver, city1, city2, max_retries=3)
+    # Iterate through all possible combinations of routes
+    with tqdm(airport_routes, total=total_routes, desc='Routes', leave=False) as routes_pbar:
+        for city1, city2 in routes_pbar:
 
-                # Loop through days
-                for i in range(260):
+            # Initialize the driver
+            driver = configure_driver()
+
+            # Go to the flights page
+            go_to_page(driver, city1, city2, max_retries=3)
+
+            # Loop through days with tqdm context manager
+            days_ahead = 5
+            with tqdm(range(days_ahead), total=days_ahead, desc='Days', leave=False) as days_pbar:
+                for _ in days_pbar:
                     flight_date_string, flightcards = get_day_info(driver)
-                    for item in flightcards:
+                    flights_pbar = tqdm(flightcards, desc='Flights', leave=False)
+                    for item in flights_pbar:
                         flight_info_list = get_flight_info(item, flight_date_string, driver)
                         # Store data in database
                         store_info_on_db(cursor, flight_info_list, today, cnx, driver)
                         # Click on the next day button
                     next_page(driver)
-                    i += 1
-                driver.close()
 
-    print("All done")
+            # Close driver instance
+            driver.quit()
+
+    print("\nAll done")
 
 
 __main__()
